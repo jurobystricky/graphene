@@ -83,10 +83,6 @@ static struct shim_ipc_info* __create_ipc_info(IDTYPE vmid, const char* uri, siz
 static void __free_ipc_info(struct shim_ipc_info* info) {
     assert(locked(&ipc_info_lock));
 
-    if (info->pal_handle) {
-        DkObjectClose(info->pal_handle);
-        info->pal_handle = NULL;
-    }
     if (info->port)
         put_ipc_port(info->port);
     qstrfree(&info->uri);
@@ -167,24 +163,6 @@ void put_ipc_info_in_list(struct shim_ipc_info* info) {
     unlock(&ipc_info_lock);
 }
 
-struct shim_ipc_info* lookup_ipc_info(IDTYPE vmid) {
-    assert(vmid);
-    lock(&ipc_info_lock);
-
-    struct shim_ipc_info* info;
-    LISTP_TYPE(shim_ipc_info)* info_bucket = &info_hlist[CLIENT_HASH(vmid)];
-    LISTP_FOR_EACH_ENTRY(info, info_bucket, hlist) {
-        if (info->vmid == vmid && !qstrempty(&info->uri)) {
-            __get_ipc_info(info);
-            unlock(&ipc_info_lock);
-            return info;
-        }
-    }
-
-    unlock(&ipc_info_lock);
-    return NULL;
-}
-
 struct shim_process_ipc_info* create_process_ipc_info(void) {
     struct shim_process_ipc_info* new_process_ipc_info = calloc(1, sizeof(*new_process_ipc_info));
     if (!new_process_ipc_info)
@@ -252,25 +230,32 @@ int send_ipc_message(struct shim_ipc_msg* msg, struct shim_ipc_port* port) {
     assert(msg->size >= IPC_MSG_MINIMAL_SIZE);
 
     msg->src = g_process_ipc_info.vmid;
-    debug("Sending ipc message to port %p (handle %p)\n", port, port->pal_handle);
+    log_debug("Sending ipc message to port %p (handle %p)\n", port, port->pal_handle);
 
     size_t total_bytes = msg->size;
     size_t bytes       = 0;
 
     do {
-        PAL_NUM ret =
-            DkStreamWrite(port->pal_handle, 0, total_bytes - bytes, (void*)msg + bytes, NULL);
+        size_t size = total_bytes - bytes;
+        int ret = DkStreamWrite(port->pal_handle, 0, &size, (void*)msg + bytes, NULL);
 
-        if (ret == PAL_STREAM_ERROR) {
-            if (PAL_ERRNO() == EINTR || PAL_ERRNO() == EAGAIN || PAL_ERRNO() == EWOULDBLOCK)
+        if (ret < 0 || size == 0) {
+            if (ret == -PAL_ERROR_INTERRUPTED || ret == -PAL_ERROR_TRYAGAIN) {
                 continue;
+            }
+            if (ret == 0) {
+                assert(size == 0);
+                ret = -EINVAL;
+            } else {
+                ret = pal_to_unix_errno(ret);
+            }
 
-            debug("Port %p (handle %p) was removed during sending\n", port, port->pal_handle);
+            log_debug("Port %p (handle %p) was removed during sending\n", port, port->pal_handle);
             del_ipc_port_fini(port);
-            return -PAL_ERRNO();
+            return ret;
         }
 
-        bytes += ret;
+        bytes += size;
     } while (bytes < total_bytes);
 
     return 0;
@@ -321,7 +306,7 @@ int send_ipc_message_with_ack(struct shim_ipc_msg_with_ack* msg, struct shim_ipc
     if (seq)
         *seq = msg->msg.seq;
 
-    debug("Waiting for response (seq = %lu)\n", msg->msg.seq);
+    log_debug("Waiting for response (seq = %lu)\n", msg->msg.seq);
 
     /* force thread which will send the message to wait for response;
      * ignore unrelated interrupts but fail on actual errors */
@@ -331,7 +316,7 @@ int send_ipc_message_with_ack(struct shim_ipc_msg_with_ack* msg, struct shim_ipc
             goto out;
     } while (ret != 0);
 
-    debug("Finished waiting for response (seq = %lu, ret = %d)\n", msg->msg.seq, msg->retval);
+    log_debug("Finished waiting for response (seq = %lu, ret = %d)\n", msg->msg.seq, msg->retval);
     ret = msg->retval;
 out:
     lock(&port->msgs_lock);
@@ -358,14 +343,17 @@ struct shim_ipc_info* create_ipc_info_and_port(bool use_vmid_as_port_name) {
     /* pipe for g_process_ipc_info.self is of format "pipe:<g_process_ipc_info.vmid>", others with
      * random name */
     char uri[PIPE_URI_SIZE];
-    if (create_pipe(NULL, uri, PIPE_URI_SIZE, &info->pal_handle, &info->uri,
-                    use_vmid_as_port_name) < 0) {
+    PAL_HANDLE handle = NULL;
+    if (create_pipe(NULL, uri, PIPE_URI_SIZE, &handle, &info->uri, use_vmid_as_port_name) < 0) {
         put_ipc_info(info);
         return NULL;
     }
 
-    add_ipc_port_by_id(g_process_ipc_info.vmid, info->pal_handle, IPC_PORT_LISTENING, NULL,
-                       &info->port);
+    add_ipc_port_by_id(g_process_ipc_info.vmid, handle, IPC_PORT_LISTENING, NULL, &info->port);
+
+    if (!info->port) {
+        DkObjectClose(handle);
+    }
 
     return info;
 }
@@ -405,19 +393,10 @@ BEGIN_CP_FUNC(ipc_info) {
         *new_info = *info;
         REF_SET(new_info->ref_count, 0);
 
+        assert(!new_info->port);
+
         /* call qstr-specific checkpointing function for new_info->uri */
         DO_CP_IN_MEMBER(qstr, new_info, uri);
-
-        if (info->pal_handle) {
-            struct shim_palhdl_entry* entry;
-            /* call palhdl-specific checkpointing function to checkpoint
-             * info->pal_handle and return created object in entry */
-            DO_CP(palhdl, info->pal_handle, &entry);
-            /* info's PAL handle will be re-opened with new URI during
-             * palhdl restore (see checkpoint.c) */
-            entry->uri     = &new_info->uri;
-            entry->phandle = &new_info->pal_handle;
-        }
     } else {
         /* already checkpointed */
         new_info = (struct shim_ipc_info*)(base + off);

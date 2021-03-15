@@ -23,9 +23,7 @@
 #include "sysdep-arch.h"
 #include "uthash.h"
 
-#define IS_ERR      INTERNAL_SYSCALL_ERROR
 #define IS_ERR_P    INTERNAL_SYSCALL_ERROR_P
-#define ERRNO       INTERNAL_SYSCALL_ERRNO
 #define ERRNO_P     INTERNAL_SYSCALL_ERRNO_P
 #define IS_UNIX_ERR INTERNAL_SYSCALL_ERRNO_RANGE
 
@@ -75,7 +73,7 @@ int _DkMutexAtomicCreate(struct mutex_handle* mut);
 int __DkMutexDestroy(struct mutex_handle* mut);
 int _DkMutexLock(struct mutex_handle* mut);
 int _DkMutexLockTimeout(struct mutex_handle* mut, int64_t timeout_us);
-int _DkMutexUnlock(struct mutex_handle* mut);
+void _DkMutexUnlock(struct mutex_handle* mut);
 
 int* get_futex(void);
 void free_futex(int* futex);

@@ -4,8 +4,6 @@
 #include "api.h"
 #include "pal_internal.h"
 
-#ifndef NO_INTERNAL_PRINTF
-
 // Collect up to PRINTBUF_SIZE characters into a buffer
 // and perform ONE system call to print all of them,
 // in order to make the lines output to the console atomic
@@ -20,9 +18,9 @@ struct printbuf {
     char buf[PRINTBUF_SIZE];
 };
 
-static int fputch(void* f, int ch, void* putdat) {
+static int fputch(void* f, int ch, void* put_data) {
     __UNUSED(f);
-    struct printbuf* b = putdat;
+    struct printbuf* b = put_data;
 
     b->buf[b->idx++] = ch;
     if (b->idx == PRINTBUF_SIZE - 1) {
@@ -33,23 +31,24 @@ static int fputch(void* f, int ch, void* putdat) {
     return 0;
 }
 
+__attribute__((format(printf, 1, 0)))
 int vprintf(const char* fmt, va_list ap) {
     struct printbuf b;
 
     b.idx = 0;
     b.cnt = 0;
-    vfprintfmt(&fputch, NULL, &b, fmt, ap);
+    vfprintfmt(fputch, NULL, &b, fmt, ap);
     _DkPrintConsole(b.buf, b.idx);
 
     return b.cnt;
 }
 
-int log_vprintf(const char* fmt, va_list ap) {
+static int log_vprintf(const char* fmt, va_list ap) {
     struct printbuf b;
 
     b.idx = 0;
     b.cnt = 0;
-    vfprintfmt(&fputch, NULL, &b, fmt, ap);
+    vfprintfmt(fputch, NULL, &b, fmt, ap);
     _DkDebugLog(b.buf, b.idx);
 
     return b.cnt;
@@ -67,14 +66,11 @@ int printf(const char* fmt, ...) {
 }
 EXTERN_ALIAS(printf);
 
-int log_printf(const char* fmt, ...) {
-    va_list ap;
-    int cnt;
-
-    va_start(ap, fmt);
-    cnt = log_vprintf(fmt, ap);
-    va_end(ap);
-
-    return cnt;
+void _log(int level, const char* fmt, ...) {
+    if (level <= g_pal_control.log_level) {
+        va_list ap;
+        va_start(ap, fmt);
+        log_vprintf(fmt, ap);
+        va_end(ap);
+    }
 }
-#endif

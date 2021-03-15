@@ -71,7 +71,9 @@ noreturn static void __shim_do_execve_rtld(struct execve_rtld_arg* __arg) {
         if (bkeep_munmap(vma->addr, vma->length, !!(vma->flags & VMA_INTERNAL), &tmp_vma) < 0) {
             BUG();
         }
-        DkVirtualMemoryFree(vma->addr, vma->length);
+        if (DkVirtualMemoryFree(vma->addr, vma->length) < 0) {
+            BUG();
+        }
         bkeep_remove_tmp_vma(tmp_vma);
     }
 
@@ -92,13 +94,13 @@ noreturn static void __shim_do_execve_rtld(struct execve_rtld_arg* __arg) {
 
     cur_thread->robust_list = NULL;
 
-    debug("execve: start execution\n");
+    log_debug("execve: start execution\n");
     /* Passing ownership of `exec` to `execute_elf_object`. */
     execute_elf_object(exec, arg.new_argp, arg.new_auxv);
     /* NOTREACHED */
 
 error:
-    debug("execve: failed %d\n", ret);
+    log_error("execve: failed %d\n", ret);
     process_exit(/*error_code=*/0, /*term_signal=*/SIGKILL);
 }
 
@@ -184,7 +186,6 @@ reopen:
         return ret;
 
     struct shim_mount* fs = dent->fs;
-    get_dentry(dent);
 
     if (!fs->d_ops->open) {
         ret = -EACCES;
@@ -214,9 +215,14 @@ reopen:
     set_handle_fs(exec, fs);
     exec->flags    = O_RDONLY;
     exec->acc_mode = MAY_READ;
+
+    get_dentry(dent);
+    exec->dentry   = dent;
+
     ret = fs->d_ops->open(exec, dent, O_RDONLY);
 
     if (qstrempty(&exec->uri)) {
+        put_dentry(dent);
         put_handle(exec);
         return -EACCES;
     }
@@ -224,6 +230,7 @@ reopen:
     dentry_get_path_into_qstr(dent, &exec->path);
 
     if ((ret = check_elf_object(exec)) < 0 && ret != -EINVAL) {
+        put_dentry(dent);
         put_handle(exec);
         return ret;
     }
@@ -283,7 +290,8 @@ reopen:
         } while (!ended);
 
         if (!started) {
-            debug("file not recognized as ELF or shebang");
+            log_warning("file not recognized as ELF or shebang");
+            put_dentry(dent);
             put_handle(exec);
             return -ENOEXEC;
         }
@@ -295,13 +303,15 @@ reopen:
 
         struct sharg* first = LISTP_FIRST_ENTRY(&new_shargs, struct sharg, list);
         assert(first);
-        debug("detected as script: run by %s\n", first->arg);
+        log_debug("detected as script: run by %s\n", first->arg);
         file = first->arg;
         LISTP_SPLICE(&new_shargs, &shargs, list, sharg);
+        put_dentry(dent);
         put_handle(exec);
         goto reopen;
     }
 
+    put_dentry(dent);
     /* If `execve` is invoked concurrently by multiple threads, let only one succeed. From this
      * point errors are fatal. */
     static unsigned int first = 0;
@@ -318,6 +328,7 @@ reopen:
     /* Passing ownership of `exec`. */
     ret = shim_do_execve_rtld(exec, argv, envp);
     assert(ret < 0);
+
     put_handle(exec);
     /* We might have killed some threads and closed some fds and execve failed internally. User app
      * might now be in undefined state, we would better blow everything up. */

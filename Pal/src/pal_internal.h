@@ -187,7 +187,7 @@ int _DkStreamMap(PAL_HANDLE handle, void** addr, int prot, uint64_t offset, uint
 int _DkStreamUnmap(void* addr, uint64_t size);
 int64_t _DkStreamSetLength(PAL_HANDLE handle, uint64_t length);
 int _DkStreamFlush(PAL_HANDLE handle);
-int _DkStreamGetName(PAL_HANDLE handle, char* buf, int size);
+int _DkStreamGetName(PAL_HANDLE handle, char* buf, size_t size);
 const char* _DkStreamRealpath(PAL_HANDLE hdl);
 int _DkSendHandle(PAL_HANDLE hdl, PAL_HANDLE cargo);
 int _DkReceiveHandle(PAL_HANDLE hdl, PAL_HANDLE* cargo);
@@ -222,7 +222,6 @@ int _DkVirtualMemoryFree(void* addr, uint64_t size);
 int _DkVirtualMemoryProtect(void* addr, uint64_t size, int prot);
 
 /* DkObject calls */
-int _DkObjectReference(PAL_HANDLE objectHandle);
 int _DkObjectClose(PAL_HANDLE objectHandle);
 int _DkSynchronizationObjectWait(PAL_HANDLE handle, int64_t timeout_us);
 int _DkStreamsWaitEvents(size_t count, PAL_HANDLE* handle_array, PAL_FLG* events,
@@ -230,7 +229,6 @@ int _DkStreamsWaitEvents(size_t count, PAL_HANDLE* handle_array, PAL_FLG* events
 
 /* DkException calls & structures */
 PAL_EVENT_HANDLER _DkGetExceptionHandler(PAL_NUM event_num);
-void _DkRaiseFailure(int error);
 
 /* other DK calls */
 void _DkInternalLock(PAL_LOCK* mut);
@@ -276,7 +274,7 @@ bool is_elf_object(PAL_HANDLE handle);
 int load_elf_object(const char* uri, enum object_type type);
 int load_elf_object_by_handle(PAL_HANDLE handle, enum object_type type, void** out_loading_base);
 
-void init_slab_mgr(int alignment);
+void init_slab_mgr(size_t alignment);
 void* malloc(size_t size);
 void* malloc_copy(const void* mem, size_t size);
 void* calloc(size_t nmem, size_t size);
@@ -301,25 +299,16 @@ void free(void* mem);
 
 int _DkInitDebugStream(const char* path);
 ssize_t _DkDebugLog(const void* buf, size_t size);
-void _DkPrintConsole(const void* buf, int size);
+void _DkPrintConsole(const void* buf, size_t size);
 int printf(const char* fmt, ...) __attribute__((format(printf, 1, 2)));
 int vprintf(const char* fmt, va_list ap) __attribute__((format(printf, 1, 0)));
-int log_printf(const char* fmt, ...) __attribute__((format(printf, 1, 2)));
-int log_vprintf(const char* fmt, va_list ap) __attribute__((format(printf, 1, 0)));
 
-/* err - positive value of error code */
-static inline void print_error(const char* msg, int err) {
-    printf("%s (%s)\n", msg, pal_strerror(err));
-}
+// TODO(mkow): We should make it cross-object-inlinable, ideally by enabling LTO, less ideally by
+// pasting it here and making `inline`, but our current linker scripts prevent both.
+void _log(int level, const char* fmt, ...) __attribute__((format(printf, 2, 3)));
 
 #define PAL_LOG_DEFAULT_LEVEL  PAL_LOG_ERROR
 #define PAL_LOG_DEFAULT_FD     2
-
-#define _log(level, fmt...)                          \
-    do {                                             \
-        if ((level) <= g_pal_control.log_level)      \
-            log_printf(fmt);                         \
-    }  while(0)
 
 #define log_error(fmt...)    _log(PAL_LOG_ERROR, fmt)
 #define log_warning(fmt...)  _log(PAL_LOG_WARNING, fmt)

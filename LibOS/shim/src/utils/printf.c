@@ -17,13 +17,13 @@ static inline int debug_fputs(const char* buf, size_t size) {
     size_t bytes = 0;
 
     while (bytes < size) {
-        PAL_NUM x = DkDebugLog((void*)(buf + bytes), size - bytes);
-        if (x == PAL_STREAM_ERROR) {
-            int err = PAL_ERRNO();
-            if (err == EINTR || err == EAGAIN || err == EWOULDBLOCK) {
+        PAL_NUM x = size - bytes;
+        int ret = DkDebugLog((void*)(buf + bytes), &x);
+        if (ret < 0) {
+            if (ret == -PAL_ERROR_INTERRUPTED || ret == -PAL_ERROR_TRYAGAIN) {
                 continue;
             }
-            return -err;
+            return pal_to_unix_errno(ret);
         }
 
         bytes += x;
@@ -100,7 +100,7 @@ void debug_putch(int ch) {
 }
 
 void debug_vprintf(const char* fmt, va_list ap) {
-    vfprintfmt((void*)debug_fputch, NULL, shim_get_tcb()->debug_buf, fmt, ap);
+    vfprintfmt(debug_fputch, NULL, shim_get_tcb()->debug_buf, fmt, ap);
 }
 
 void debug_printf(const char* fmt, ...) {
@@ -141,4 +141,13 @@ void debug_setprefix(shim_tcb_t* tcb) {
     }
 
     buf->start = buf->end;
+}
+
+void _log(int level, const char* fmt, ...) {
+    if (level <= g_log_level) {
+        va_list ap;
+        va_start(ap, fmt);
+        debug_vprintf(fmt, ap);
+        va_end(ap);
+    }
 }

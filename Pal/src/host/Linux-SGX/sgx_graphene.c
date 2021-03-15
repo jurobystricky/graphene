@@ -9,6 +9,7 @@
 #include "pal_debug.h"
 #include "pal_error.h"
 #include "sgx_internal.h"
+#include "sgx_log.h"
 
 #define PRINTBUF_SIZE 256
 
@@ -18,38 +19,29 @@ struct printbuf {
     char buf[PRINTBUF_SIZE];
 };
 
-static int fputch(void* f, int ch, struct printbuf* b) {
+static int fputch(void* f, int ch, void* _buf) {
     __UNUSED(f);
 
-    b->buf[b->idx++] = ch;
-    if (b->idx == PRINTBUF_SIZE - 1) {
-        INLINE_SYSCALL(write, 3, 2, b->buf, b->idx);
-        b->idx = 0;
+    struct printbuf* buf = (struct printbuf*)_buf;
+
+    buf->buf[buf->idx++] = ch;
+    if (buf->idx == PRINTBUF_SIZE - 1) {
+        INLINE_SYSCALL(write, 3, 2, buf->buf, buf->idx);
+        buf->idx = 0;
     }
-    b->cnt++;
+    buf->cnt++;
     return 0;
 }
 
 static int vfdprintf(int fd, const char* fmt, va_list ap) {
-    struct printbuf b;
+    struct printbuf buf;
 
-    b.idx = 0;
-    b.cnt = 0;
-    vfprintfmt((void*)&fputch, NULL, &b, fmt, ap);
-    INLINE_SYSCALL(write, 3, fd, b.buf, b.idx);
+    buf.idx = 0;
+    buf.cnt = 0;
+    vfprintfmt(fputch, NULL, &buf, fmt, ap);
+    INLINE_SYSCALL(write, 3, fd, buf.buf, buf.idx);
 
-    return b.cnt;
-}
-
-int pal_fdprintf(int fd, const char* fmt, ...) {
-    va_list ap;
-    int cnt;
-
-    va_start(ap, fmt);
-    cnt = vfdprintf(fd, fmt, ap);
-    va_end(ap);
-
-    return cnt;
+    return buf.cnt;
 }
 
 int pal_printf(const char* fmt, ...) {
@@ -61,4 +53,13 @@ int pal_printf(const char* fmt, ...) {
     va_end(ap);
 
     return cnt;
+}
+
+void _urts_log(int level, const char* fmt, ...) {
+    if (level <= g_urts_log_level) {
+        va_list ap;
+        va_start(ap, fmt);
+        vfdprintf(g_urts_log_fd, fmt, ap);
+        va_end(ap);
+    }
 }

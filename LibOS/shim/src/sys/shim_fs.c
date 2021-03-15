@@ -205,6 +205,11 @@ long shim_do_fchmod(int fd, mode_t mode) {
     struct shim_dentry* dent = hdl->dentry;
     int ret = 0;
 
+    if (!dent) {
+        ret = -EINVAL;
+        goto out;
+    }
+
     if (dent->fs && dent->fs->d_ops && dent->fs->d_ops->chmod) {
         if ((ret = dent->fs->d_ops->chmod(dent, mode)) < 0)
             goto out;
@@ -347,7 +352,7 @@ static ssize_t handle_copy(struct shim_handle* hdli, off_t* offseti, struct shim
     if (!do_mapi && (hdli->flags & O_NONBLOCK) && fsi->fs_ops->setflags) {
         int ret = fsi->fs_ops->setflags(hdli, 0);
         if (!ret) {
-            debug("mark handle %s as blocking\n", qstrgetstr(&hdli->uri));
+            log_debug("mark handle %s as blocking\n", qstrgetstr(&hdli->uri));
             do_marki = true;
         }
     }
@@ -355,7 +360,7 @@ static ssize_t handle_copy(struct shim_handle* hdli, off_t* offseti, struct shim
     if (!do_mapo && (hdlo->flags & O_NONBLOCK) && fso->fs_ops->setflags) {
         int ret = fso->fs_ops->setflags(hdlo, 0);
         if (!ret) {
-            debug("mark handle %s as blocking\n", qstrgetstr(&hdlo->uri));
+            log_debug("mark handle %s as blocking\n", qstrgetstr(&hdlo->uri));
             do_marko = true;
         }
     }
@@ -378,7 +383,7 @@ static ssize_t handle_copy(struct shim_handle* hdli, off_t* offseti, struct shim
                 if ((hdli->flags & O_NONBLOCK) && fsi->fs_ops->setflags) {
                     int ret = fsi->fs_ops->setflags(hdli, 0);
                     if (!ret) {
-                        debug("mark handle %s as blocking\n", qstrgetstr(&hdli->uri));
+                        log_debug("mark handle %s as blocking\n", qstrgetstr(&hdli->uri));
                         do_marki = true;
                     }
                 }
@@ -397,7 +402,7 @@ static ssize_t handle_copy(struct shim_handle* hdli, off_t* offseti, struct shim
                 if ((hdlo->flags & O_NONBLOCK) && fso->fs_ops->setflags) {
                     int ret = fso->fs_ops->setflags(hdlo, 0);
                     if (!ret) {
-                        debug("mark handle %s as blocking\n", qstrgetstr(&hdlo->uri));
+                        log_debug("mark handle %s as blocking\n", qstrgetstr(&hdlo->uri));
                         do_marko = true;
                     }
                 }
@@ -409,6 +414,7 @@ static ssize_t handle_copy(struct shim_handle* hdli, off_t* offseti, struct shim
         if (do_mapi && do_mapo) {
             copysize = count - bytes > bufsize ? bufsize : count - bytes;
             memcpy(bufo + boffo, bufi + boffi, copysize);
+            /* XXX: ??? Where is vma bookkeeping? Hans, get ze flammenwerfer... */
             DkVirtualMemoryFree(bufi, ALLOC_ALIGN_UP(bufsize + boffi));
             bufi = NULL;
             if (fso->fs_ops->flush) {
@@ -416,6 +422,7 @@ static ssize_t handle_copy(struct shim_handle* hdli, off_t* offseti, struct shim
                  * explicit flush before freeing PF's mmapped region `bufo` */
                 fso->fs_ops->flush(hdlo);
             }
+            /* XXX: ??? Where is vma bookkeeping? Hans, get ze flammenwerfer... */
             DkVirtualMemoryFree(bufo, ALLOC_ALIGN_UP(bufsize + boffo));
             bufo = NULL;
         } else if (do_mapo) {
@@ -425,12 +432,14 @@ static ssize_t handle_copy(struct shim_handle* hdli, off_t* offseti, struct shim
                  * explicit flush before freeing PF's mmapped region `bufo` */
                 fso->fs_ops->flush(hdlo);
             }
+            /* XXX: ??? Where is vma bookkeeping? Hans, get ze flammenwerfer... */
             DkVirtualMemoryFree(bufo, ALLOC_ALIGN_UP(bufsize + boffo));
             bufo = NULL;
             if (copysize < 0)
                 break;
         } else if (do_mapi) {
             copysize = fso->fs_ops->write(hdlo, bufi + boffi, bufsize);
+            /* XXX: ??? Where is vma bookkeeping? Hans, get ze flammenwerfer... */
             DkVirtualMemoryFree(bufi, ALLOC_ALIGN_UP(bufsize + boffi));
             bufi = NULL;
             if (copysize < 0)
@@ -450,7 +459,7 @@ static ssize_t handle_copy(struct shim_handle* hdli, off_t* offseti, struct shim
                 break;
         }
 
-        debug("copy %d bytes\n", copysize);
+        log_debug("copy %d bytes\n", copysize);
         bytes += copysize;
         offi += copysize;
         offo += copysize;
@@ -472,12 +481,12 @@ static ssize_t handle_copy(struct shim_handle* hdli, off_t* offseti, struct shim
     }
 
     if (do_marki && (hdli->flags & O_NONBLOCK)) {
-        debug("mark handle %s as nonblocking\n", qstrgetstr(&hdli->uri));
+        log_debug("mark handle %s as nonblocking\n", qstrgetstr(&hdli->uri));
         fsi->fs_ops->setflags(hdli, O_NONBLOCK);
     }
 
     if (do_marko && (hdlo->flags & O_NONBLOCK)) {
-        debug("mark handle %s as nonblocking\n", qstrgetstr(&hdlo->uri));
+        log_debug("mark handle %s as nonblocking\n", qstrgetstr(&hdlo->uri));
         fso->fs_ops->setflags(hdlo, O_NONBLOCK);
     }
 
